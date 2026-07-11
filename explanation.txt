@@ -4,6 +4,7 @@
 
 This document traces the exact path of files, middlewares, functions, and database
 operations triggered during the key operations of the TaskFlow application.
+NOTE: this is just for my understanding on how i thought of building this, feel free to read it
 
 --------------------------------------------------------------------------------
 1. THE USER SIGNUP FLOW (POST /api/auth/signup)
