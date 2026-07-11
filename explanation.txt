@@ -1,0 +1,176 @@
+================================================================================
+                    TASKFLOW: COMPLETE LAYER-BY-LAYER FLOW EXPLANATION
+================================================================================
+
+This document traces the exact path of files, middlewares, functions, and database
+operations triggered during the key operations of the TaskFlow application.
+
+--------------------------------------------------------------------------------
+1. THE USER SIGNUP FLOW (POST /api/auth/signup)
+--------------------------------------------------------------------------------
+
+What it does: Creates a new user profile, hashes their password, and logs them in.
+
+[LAYER-BY-LAYER CODE PATHWAY]:
+1.  Frontend Form: `frontend/src/pages/Signup.jsx` (Submits Name, Email, Password)
+2.  Auth Context: `frontend/src/context/AuthContext.jsx` (signup() function)
+3.  Axios Client: `frontend/src/services/api.js` (POSTs to /auth/signup)
+4.  Backend Router: `backend/src/routes/auth.js` (router.post('/signup'))
+5.  Validation Middleware: `backend/src/middlewares/validationMiddleware.js`
+6.  Zod Validation Schema: `backend/src/validations/authValidation.js` (signupSchema)
+7.  Auth Controller: `backend/src/controllers/authController.js` (signup())
+8.  Auth Service: `backend/src/services/authService.js` (signup())
+9.  User Repository: `backend/src/repositories/userRepository.js` (findByEmail() and create())
+10. Database (PostgreSQL): User table record insertion.
+11. Auth Service: (signs JWT token via jwt.sign() using JWT_SECRET)
+12. Response Handler: propagates data back to frontend.
+13. Global Error Handler: `backend/src/middlewares/errorMiddleware.js` (catches conflicts or validation failures)
+
+[DETAILED STEP-BY-STEP EXPLANATION]:
+*   **Step A (Frontend Form Submission)**: The user enters their Name, Email, and Password inside the `Signup.jsx` form and clicks "Create Account".
+*   **Step B (AuthContext Dispatch)**: The form calls `signup(name, email, password)` from `AuthContext.jsx`. The context triggers an Axios POST request via the unified `api.js` client.
+*   **Step C (Backend Router Routing)**: The Express server receives the HTTP request at `POST /api/auth/signup`. It maps the route in `routes/auth.js`.
+*   **Step D (Input Validation)**: Before executing code, `validationMiddleware` interceptor intercepts the request. It parses the body against the Zod `signupSchema`. If the email is malformed or the password is under 6 characters, Zod throws a validation error. The middleware forwards this error via `next(err)` directly to `errorMiddleware.js` which immediately returns a formatted JSON `400 Bad Request` list of issues.
+*   **Step E (Controller Mapping)**: If validation passes, the request reaches the `authController.signup` method. It extracts `name`, `email`, and `password` from the body and forwards them to `authService`.
+*   **Step F (Duplicate Registration Check)**: Inside `authService.signup`, the service calls `userRepository.findByEmail(email)`. The repository executes a Prisma Client query (`prisma.user.findUnique`) to check if the email is already in the database. If it exists, the service throws an error with `statusCode = 409` (Conflict), which the controller forwards to the error handler middleware.
+*   **Step G (Password Encryption)**: If the email is unique, the service uses `bcryptjs` to generate a secure random salt and hashes the plaintext password. This ensures the raw password is never stored in plain text.
+*   **Step H (Database Insertion)**: The service calls `userRepository.create` with the name, email, and hashed password. The repository runs `prisma.user.create` which inserts a new row in the User table in PostgreSQL and returns the generated User ID.
+*   **Step I (JWT Issuance)**: The service takes the saved user's ID, email, and name, and signs a JSON Web Token (JWT) using `jwt.sign` and `process.env.JWT_SECRET` (configured to expire in 7 days).
+*   **Step J (Successful Response)**: The controller receives the user info and JWT token, and sends an `HTTP 201 Created` status with the token and user data in a JSON payload.
+*   **Step K (Frontend Login State Sync)**: The `AuthContext` receives the token and user details from Axios. It saves the token to `localStorage` (as `taskflow_token`) and the user details to state. This automatically triggers a re-render of `App.jsx`, transitioning the user past the `ProtectedRoute` guard and onto the dashboard.
+
+---
+
+--------------------------------------------------------------------------------
+2. THE USER LOGIN FLOW (POST /api/auth/login)
+--------------------------------------------------------------------------------
+
+What it does: Verifies credentials and issues a secure JWT token for session storage.
+
+[LAYER-BY-LAYER CODE PATHWAY]:
+1.  Frontend Form: `frontend/src/pages/Login.jsx` (Submits Email, Password)
+2.  Auth Context: `frontend/src/context/AuthContext.jsx` (login() function)
+3.  Axios Client: `frontend/src/services/api.js` (POSTs to /auth/login)
+4.  Backend Router: `backend/src/routes/auth.js` (router.post('/login'))
+5.  Validation Middleware: `backend/src/middlewares/validationMiddleware.js` (checks loginSchema)
+6.  Auth Controller: `backend/src/controllers/authController.js` (login())
+7.  Auth Service: `backend/src/services/authService.js` (login())
+8.  User Repository: `backend/src/repositories/userRepository.js` (findByEmail())
+9.  Database (PostgreSQL): User table record query.
+10. Auth Service: (compares password with bcrypt.compare() and signs JWT token)
+11. Response Handler: sends HTTP 200 JSON with user data and JWT token.
+
+[DETAILED STEP-BY-STEP EXPLANATION]:
+*   **Step A**: User enters credentials in `Login.jsx` and submits.
+*   **Step B**: `AuthContext` makes a POST request to `/api/auth/login` containing the credentials.
+*   **Step C**: Express routes the request. Zod validation middleware validates the fields. If empty or invalid, it returns `400 Bad Request` immediately.
+*   **Step D**: `authController.login` forwards the payload to `authService.login`.
+*   **Step E**: The service calls `userRepository.findByEmail(email)` to fetch the user record (including their hashed password) from PostgreSQL. If the user does not exist, the service throws a `401 Unauthorized` error immediately.
+*   **Step F (Credential Validation)**: The service uses `bcrypt.compare` to hash the incoming login password and compare it against the stored hash in the database. If they don't match, it throws a `401 Unauthorized` error (using a generic error message to prevent account enumeration).
+*   **Step G**: Upon credential match, the service signs a JWT token using the User's ID, email, and name.
+*   **Step H**: The controller returns `HTTP 200 OK` with the token. The frontend stores it in `localStorage` and routes the user to the Dashboard.
+
+---
+
+--------------------------------------------------------------------------------
+3. THE ROUTE PROTECTION & USER PROFILE FLOW (GET /api/auth/me)
+--------------------------------------------------------------------------------
+
+What it does: Validates that the client has a valid token and retrieves the fresh, up-to-date user details.
+
+[LAYER-BY-LAYER CODE PATHWAY]:
+1.  Frontend Load: App initializes or context mounts.
+2.  Axios Client: `api.js` automatically grabs `taskflow_token` from `localStorage` and injects it as `Authorization: Bearer <token>` in headers.
+3.  Backend Router: `routes/auth.js` (router.get('/me'))
+4.  Auth Middleware: `backend/src/middlewares/authMiddleware.js` (authenticates and fetches from DB)
+5.  User Repository: `backend/src/repositories/userRepository.js` (findById())
+6.  Database (PostgreSQL): User table select query.
+7.  Auth Controller: `backend/src/controllers/authController.js` (me())
+8.  Response: Returns HTTP 200 JSON with latest user details.
+
+[DETAILED STEP-BY-STEP EXPLANATION]:
+*   **Step A**: When the React application mounts or refreshes, `AuthContext` detects a token in `localStorage`. It attempts to verify the session by triggering an Axios call to `/auth/me`.
+*   **Step B (Authorization Header Interception)**: Axios interceptor injects the Bearer token in the request.
+*   **Step C (Middleware Verification)**: The request hits the backend and runs the `authMiddleware`.
+    *   The middleware checks the `Authorization` header. If absent or does not start with "Bearer ", it returns `401 Unauthorized` immediately.
+    *   It calls `jwt.verify(token, process.env.JWT_SECRET)`. If the token is expired or malformed, it throws a JsonWebTokenError, returning `401 Unauthorized`.
+*   **Step D (Database Lookup - Profile Freshness)**: If the token is valid, it retrieves the user ID from the decoded payload and queries the database using `userRepository.findById(id)`.
+    *   If the user has been deleted or renamed in the database, the query returns null, and the middleware rejects the request with a `401 Unauthorized`.
+    *   If the user is active, the middleware attaches the fresh database record (containing the most up-to-date name and email) to `req.user`. This prevents stale data issues.
+*   **Step E**: The request reaches `authController.me`, which sends back `HTTP 200 OK` containing the latest name and email.
+
+---
+
+--------------------------------------------------------------------------------
+4. THE CREATE TASK FLOW (POST /api/tasks)
+--------------------------------------------------------------------------------
+
+What it does: Validates task parameters, checks project ownership, and creates a task.
+
+[LAYER-BY-LAYER CODE PATHWAY]:
+1.  Frontend Form: `frontend/src/components/TaskModal.jsx` (Submits title, description, status, priority, dueDate)
+2.  Parent Component: `frontend/src/pages/ProjectDetailsPage.jsx` (handleTaskSubmit() handler)
+3.  Axios Client: `api.js` (POSTs to /tasks)
+4.  Backend Router: `backend/src/routes/task.js` (router.post('/', authMiddleware, validationMiddleware(createTaskSchema)))
+5.  Auth Middleware: `authMiddleware.js` (decrypts and verifies user identity)
+6.  Validation Middleware: `validationMiddleware.js` (validates task payload, parses dueDate to Date object)
+7.  Task Controller: `backend/src/controllers/taskController.js` (createTask())
+8.  Task Service: `backend/src/services/taskService.js` (createTask())
+9.  Project Service: `backend/src/services/projectService.js` (getProjectById() - verifies project ownership)
+10. Task Repository: `backend/src/repositories/taskRepository.js` (create())
+11. Database (PostgreSQL): Task table insert query.
+12. Response Handler: Returns HTTP 201 JSON containing the created task.
+
+[DETAILED STEP-BY-STEP EXPLANATION]:
+*   **Step A**: The user opens the TaskModal inside a project, enters task details, and clicks "Save".
+*   **Step B**: `ProjectDetailsPage.jsx` captures the submit trigger, constructs the task payload, converts the date to ISO format, and issues an Axios POST request to `/tasks` (injecting the active `projectId`).
+*   **Step C (Authorization & Validation)**:
+    *   `authMiddleware` runs, verifies the user token, checks the database, and loads the active user on `req.user`.
+    *   `validationMiddleware` runs the payload against Zod's `createTaskSchema`. The schema verifies the Title length, asserts that the Status and Priority parameters are valid enum keywords, and preprocesses the date string into a native Javascript Date object.
+*   **Step D (Project Boundary Check)**: The request is mapped to `taskController.createTask` which delegates to `taskService.createTask`.
+    *   To enforce security and project boundaries, `taskService` calls `projectService.getProjectById(projectId, userId)`.
+    *   `projectService` queries the project from the database. It verifies that the project exists and its `userId` matches the active user's ID. If the project belongs to another user, it throws `403 Forbidden`. If it doesn't exist, it throws `404 Not Found`.
+*   **Step E (Database Insertion)**: Once project ownership is authorized, the task service invokes `taskRepository.create`. The repository executes `prisma.task.create` to insert the task record into PostgreSQL.
+*   **Step F (Response & HMR Refresh)**: The controller receives the new task record and returns an `HTTP 201 Created` JSON response.
+    *   The frontend receives the successful response and increments the `refreshTrigger` state counter.
+    *   This state change is captured in the dependency array of the `useEffect` hook inside the `ProjectDetails.jsx` component.
+    *   The hook executes a background fetch to retrieve the tasks list. Because the list is loaded in the background, the UI updates instantly without flashing the main container or rendering a blank loading spinner.
+
+---
+
+--------------------------------------------------------------------------------
+5. THE PAGINATED TASK LIST FLOW (GET /api/tasks/project/:projectId)
+--------------------------------------------------------------------------------
+
+What it does: Returns filtered, searched, sorted, and paginated tasks under a project.
+
+[LAYER-BY-LAYER CODE PATHWAY]:
+1.  Frontend Component: `frontend/src/pages/ProjectDetails.jsx` (Mounts and calls fetchTasks())
+2.  Axios Client: `api.js` (GETs /tasks/project/1 with query params: page, limit, search, status, sortBy, sortOrder)
+3.  Backend Router: `backend/src/routes/task.js` (router.get('/project/:projectId'))
+4.  Auth Middleware: `authMiddleware.js` (verifies active user)
+5.  Task Controller: `backend/src/controllers/taskController.js` (getTasksForProject())
+6.  Task Service: `backend/src/services/taskService.js` (getTasksForProject())
+7.  Project Service: `projectService.js` (asserts user owns project)
+8.  Task Repository: `backend/src/repositories/taskRepository.js` (findAndCount())
+9.  Database (PostgreSQL): Executes parallel count and paginated query in a transaction block.
+10. Response Handler: Returns HTTP 200 JSON with task array and total page metadata.
+
+[DETAILED STEP-BY-STEP EXPLANATION]:
+*   **Step A**: When a user selects a project from the sidebar, the React Router transitions to `/project/:id`. `ProjectDetails.jsx` mounts.
+*   **Step B**: `ProjectDetails` executes `fetchTasks()`. It gathers query filters (the search bar input, status dropdown value, sort options, and current page counter) and sends an Axios GET request to `/tasks/project/:projectId`.
+*   **Step C**: The backend routes the request. `authMiddleware` validates the session.
+*   **Step D**: `taskController.getTasksForProject` parses incoming query strings:
+    *   It sanitizes text queries, validates pagination counters, and asserts default parameters (e.g. page = 1, limit = 8, sortBy = 'createdAt').
+*   **Step E**: `taskService` verifies project ownership.
+*   **Step F (Dynamic Query Construction)**: `taskRepository.findAndCount` builds a dynamic Prisma query:
+    *   If `search` is provided, it injects a case-insensitive `contains` filter mapping to the Title and Description:
+        `where.OR = [ { title: { contains: search, mode: 'insensitive' } }, { description: { contains: search, mode: 'insensitive' } } ]`
+    *   If `status` is provided, it appends `status: status`.
+    *   It calculates offset logic: `skip = (page - 1) * limit` and `take = limit`.
+    *   It formats the sorting criteria (e.g., sorting by due date).
+*   **Step G (Database Transaction)**: To ensure data integrity and query efficiency, the repository executes a concurrent database transaction using `prisma.$transaction`. This runs the paginated select query and the count query in a single roundtrip:
+    `const [tasks, totalCount] = await prisma.$transaction([ prisma.task.findMany(...), prisma.task.count(...) ])`
+*   **Step H**: The controller receives the results and calculates the metadata (total pages, current page, limit, total count). It returns `HTTP 200 OK` containing the tasks list and metadata.
+*   **Step I**: The frontend receives the payload, saves the data to the local state, renders the task cards, and updates the pagination footer buttons.
+================================================================================

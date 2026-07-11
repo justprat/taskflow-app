@@ -1,0 +1,51 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User model: Stores registered user information.
+// One User can have many Projects.
+model User {
+  id        Int       @id @default(autoincrement())
+  email     String    @unique
+  password  String    // Hashed password
+  name      String
+  projects  Project[] // Relation to Project model
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+// Project model: Groups tasks together for a specific objective.
+// Belongs to a User; contains many Tasks.
+model Project {
+  id          Int      @id @default(autoincrement())
+  name        String
+  description String?
+  userId      Int
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tasks       Task[]   // Relation to Task model
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// Task model: Individual action item.
+// Belongs to a Project.
+model Task {
+  id          Int       @id @default(autoincrement())
+  title       String
+  description String?
+  status      String    @default("TODO")   // Allowed values: "TODO", "IN_PROGRESS", "DONE"
+  priority    String    @default("MEDIUM") // Allowed values: "LOW", "MEDIUM", "HIGH"
+  dueDate     DateTime?
+  projectId   Int
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}

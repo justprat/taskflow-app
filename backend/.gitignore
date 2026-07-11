@@ -1,0 +1,15 @@
+# Dependency directories
+node_modules/
+
+# Local environment secret variables
+.env
+
+# Built distribution folders
+dist/
+build/
+
+# Testing/logs files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.lock-wscript
